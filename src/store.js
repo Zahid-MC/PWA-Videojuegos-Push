@@ -21,8 +21,14 @@ export function createStore(filePath) {
     renameSync(`${filePath}.tmp`, filePath);
   };
 
-  const without = (endpoint, gameId) =>
-    data.reminders.filter((item) => item.endpoint !== endpoint || item.gameId !== gameId);
+  /** Recordatorios menos los de ese juego (solo los tipos indicados, o todos). */
+  const without = (endpoint, gameId, kinds) =>
+    data.reminders.filter(
+      (item) =>
+        item.endpoint !== endpoint ||
+        item.gameId !== gameId ||
+        (kinds && !kinds.includes(item.kind)),
+    );
 
   return {
     count: () => Object.keys(data.subscriptions).length,
@@ -31,8 +37,10 @@ export function createStore(filePath) {
       Object.hasOwn(data.subscriptions, endpoint) ? data.subscriptions[endpoint] : undefined,
     upsert(subscription, preferences) {
       const isNew = !Object.hasOwn(data.subscriptions, subscription.endpoint);
-      const createdAt = isNew ? Date.now() : data.subscriptions[subscription.endpoint].createdAt;
-      data.subscriptions[subscription.endpoint] = { subscription, preferences, createdAt };
+      const { createdAt, saved } = isNew
+        ? { createdAt: Date.now(), saved: [] }
+        : data.subscriptions[subscription.endpoint];
+      data.subscriptions[subscription.endpoint] = { subscription, preferences, createdAt, saved };
       save();
       return isNew;
     },
@@ -43,11 +51,35 @@ export function createStore(filePath) {
     },
     remindersOf: (endpoint) => data.reminders.filter((item) => item.endpoint === endpoint),
     setReminder(reminder) {
-      data.reminders = [...without(reminder.endpoint, reminder.gameId), reminder];
+      const { endpoint, gameId, kind } = reminder;
+      data.reminders = [...without(endpoint, gameId, [kind]), reminder];
       save();
     },
-    removeReminder(endpoint, gameId) {
+    removeReminder(endpoint, gameId, kinds) {
+      data.reminders = without(endpoint, gameId, kinds);
+      save();
+    },
+    addSaved(endpoint, gameId) {
+      const entry = this.get(endpoint);
+      if (!entry) return;
+      entry.saved = [...new Set([...(entry.saved ?? []), gameId])];
+      save();
+    },
+    removeSaved(endpoint, gameId) {
+      const entry = this.get(endpoint);
+      if (!entry) return;
+      entry.saved = (entry.saved ?? []).filter((id) => id !== gameId);
       data.reminders = without(endpoint, gameId);
+      save();
+    },
+    replaceLibrary(endpoint, saved, reminders) {
+      // Pudo darse de baja mientras se consultaba el catálogo.
+      if (!Object.hasOwn(data.subscriptions, endpoint)) return;
+      data.subscriptions[endpoint].saved = saved;
+      data.reminders = [
+        ...data.reminders.filter((item) => item.endpoint !== endpoint),
+        ...reminders,
+      ];
       save();
     },
     /** Extrae los recordatorios vencidos para que ninguno se envíe dos veces. */

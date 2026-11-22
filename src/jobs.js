@@ -1,4 +1,22 @@
-/** Casos de negocio: juego nuevo, recordatorio y juego de la semana. */
+import { releaseReminders } from './library.js';
+
+const releaseMessage = ({ gameId, title, image }, soon) => ({
+  title: soon ? `Mañana sale ${title}` : `Ya salió ${title}`,
+  body: soon ? 'Lo tienes guardado. Prepárate para jugar.' : 'Lo tenías guardado. ¿Empezamos?',
+  url: `/juego/${gameId}`,
+  image,
+  tag: `lanzamiento-${gameId}`,
+});
+
+const reminderMessage = ({ gameId, title, image }) => ({
+  title: `Tienes pendiente ${title}`,
+  body: 'Lo dejaste programado en tu biblioteca. ¿Jugamos?',
+  url: `/juego/${gameId}`,
+  image,
+  tag: `recordatorio-${gameId}`,
+});
+
+/** Casos de negocio: juego nuevo, recordatorio, lanzamiento y juego de la semana. */
 export function createJobs({ store, catalog, notifier }) {
   const announce = (game) =>
     notifier.toMany(
@@ -39,19 +57,41 @@ export function createJobs({ store, catalog, notifier }) {
 
     async reminders(now = Date.now()) {
       let sent = 0;
-      for (const { endpoint, gameId, title, image } of store.takeDue(now)) {
-        const entry = store.get(endpoint);
+      for (const reminder of store.takeDue(now)) {
+        const entry = store.get(reminder.endpoint);
         if (!entry) continue;
-        const ok = await notifier.toOne(entry, {
-          title: `Tienes pendiente ${title}`,
-          body: 'Lo dejaste programado en tu biblioteca. ¿Jugamos?',
-          url: `/juego/${gameId}`,
-          image,
-          tag: `recordatorio-${gameId}`,
-        });
-        if (ok) sent += 1;
+
+        const isRelease = reminder.kind === 'release' || reminder.kind === 'release-soon';
+        if (isRelease) {
+          // Los lanzamientos se retrasan: se confirma la fecha antes de avisar.
+          const game = await catalog.find(reminder.gameId).catch(() => undefined);
+          if (game && game.releaseDate !== reminder.releaseDate) {
+            store.removeReminder(reminder.endpoint, game.id, ['release', 'release-soon']);
+            releaseReminders(reminder.endpoint, game, now).forEach((item) =>
+              store.setReminder(item),
+            );
+            continue;
+          }
+          if (!entry.preferences.releases) continue;
+        }
+
+        const message = isRelease
+          ? releaseMessage(reminder, reminder.kind === 'release-soon')
+          : reminderMessage(reminder);
+        if (await notifier.toOne(entry, message)) sent += 1;
       }
       return { enviadas: sent };
+    },
+
+    /** Para la demostración: avisa del lanzamiento a quienes tienen guardado ese juego. */
+    async simulateRelease(id) {
+      const game = await catalog.find(id);
+      if (!game) return null;
+      const enviadas = await notifier.toMany(
+        store.all().filter((entry) => entry.preferences.releases && entry.saved?.includes(game.id)),
+        releaseMessage({ gameId: game.id, title: game.title, image: game.image }, false),
+      );
+      return { juego: game.title, enviadas };
     },
 
     async weekly(id) {

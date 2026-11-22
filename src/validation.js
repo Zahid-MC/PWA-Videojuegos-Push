@@ -7,7 +7,16 @@ const PUSH_HOSTS = [
   /\.push\.apple\.com$/,
 ];
 
-export class BadRequest extends Error {}
+export const LIBRARY_STATUSES = ['wish', 'playing', 'done'];
+
+export class BadRequest extends Error {
+  status = 400;
+}
+
+/** 410: la app debe volver a registrarse y reintentar. */
+export class NotSubscribed extends BadRequest {
+  status = 410;
+}
 
 const isText = (value, max) =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= max;
@@ -40,6 +49,8 @@ export function parsePreferences(value) {
   return {
     newGames: value?.newGames !== false,
     weekly: value?.weekly !== false,
+    library: value?.library !== false,
+    releases: value?.releases !== false,
     genres: [...new Set(genres)],
   };
 }
@@ -62,6 +73,19 @@ export function parseRemindAt(value, now) {
     throw new BadRequest('La fecha debe ser futura y de 60 días como máximo.');
   }
   return time;
+}
+
+const MAX_LIBRARY = 200;
+
+export function parseLibrary(value) {
+  if (!Array.isArray(value) || value.length > MAX_LIBRARY) {
+    throw new BadRequest(`La biblioteca debe tener ${MAX_LIBRARY} juegos como máximo.`);
+  }
+  return value.map((item) => {
+    if (!LIBRARY_STATUSES.includes(item?.status)) throw new BadRequest('El estado no es válido.');
+    const remindAt = typeof item.remindAt === 'string' ? Date.parse(item.remindAt) : NaN;
+    return { gameId: parseGameId(item.gameId), status: item.status, remindAt };
+  });
 }
 
 export function parseMessage(value) {

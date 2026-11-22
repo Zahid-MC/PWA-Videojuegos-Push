@@ -32,6 +32,7 @@ export function createCatalog(fetchFn = fetch) {
         title: game.title,
         genre: normalizeGenre(game.genre),
         image: game.thumbnail,
+        releaseDate: game.release_date,
       }));
       loadedAt = Date.now();
       return games;

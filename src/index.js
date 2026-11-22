@@ -2,6 +2,7 @@ import webpush from 'web-push';
 import { createApp } from './app.js';
 import { createCatalog } from './catalog.js';
 import { createJobs } from './jobs.js';
+import { createLibrary } from './library.js';
 import { createNotifier } from './notifier.js';
 import { createStore } from './store.js';
 
@@ -23,6 +24,7 @@ const notifier = createNotifier({
     webpush.sendNotification(subscription, payload, { TTL: 86400, timeout: 10000 }),
 });
 const jobs = createJobs({ store, catalog, notifier });
+const library = createLibrary({ store, catalog, notifier });
 const config = {
   adminToken: env.ADMIN_TOKEN,
   allowedOrigins: (env.ALLOWED_ORIGINS ?? '')
@@ -40,6 +42,6 @@ every(20_000, 'Recordatorios', () => jobs.reminders());
 every(6 * 60 * 60 * 1000, 'Juegos nuevos', () => jobs.newGames());
 
 const port = Number(env.PORT ?? 3000);
-createApp({ store, catalog, notifier, jobs, config }).listen(port, () => {
+createApp({ store, catalog, notifier, jobs, library, config }).listen(port, () => {
   console.log(`Servidor de avisos en http://localhost:${port}/api/health`);
 });

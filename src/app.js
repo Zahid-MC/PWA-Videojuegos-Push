@@ -2,10 +2,13 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import cors from 'cors';
 import express from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { isLibraryAction } from './library.js';
 import {
   BadRequest,
+  NotSubscribed,
   parseEndpoint,
   parseGameId,
+  parseLibrary,
   parseMessage,
   parsePreferences,
   parseRemindAt,
@@ -13,14 +16,13 @@ import {
 } from './validation.js';
 
 const digest = (value) => createHash('sha256').update(value).digest();
-const MAX_REMINDERS = 20;
 
-export function createApp({ store, catalog, notifier, jobs, config }) {
+export function createApp({ store, catalog, notifier, jobs, library, config }) {
   const app = express();
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
   app.use(cors({ origin: config.allowedOrigins }));
-  app.use(express.json({ limit: '10kb' }));
+  app.use(express.json({ limit: '32kb' }));
 
   const api = express.Router();
   app.use('/api', rateLimit({ windowMs: 60_000, limit: 60, legacyHeaders: false }), api);
@@ -35,7 +37,7 @@ export function createApp({ store, catalog, notifier, jobs, config }) {
 
   const requireSubscriber = (req) => {
     const entry = store.get(parseEndpoint(req.body?.endpoint));
-    if (!entry) throw new BadRequest('Este dispositivo no está suscrito.');
+    if (!entry) throw new NotSubscribed('Este dispositivo no está suscrito.');
     return entry;
   };
 
@@ -74,23 +76,33 @@ export function createApp({ store, catalog, notifier, jobs, config }) {
   });
 
   api.post('/reminders', async (req, res) => {
-    const { endpoint } = requireSubscriber(req).subscription;
-    const gameId = parseGameId(req.body.gameId);
+    const entry = requireSubscriber(req);
     const remindAt = parseRemindAt(req.body.remindAt, Date.now());
-    const others = store.remindersOf(endpoint).filter((item) => item.gameId !== gameId);
-    if (others.length >= MAX_REMINDERS) {
-      throw new BadRequest(`Puedes tener ${MAX_REMINDERS} recordatorios como máximo.`);
-    }
     // El título sale del catálogo, no del cliente.
-    const game = await catalog.find(gameId);
+    const game = await catalog.find(parseGameId(req.body.gameId));
     if (!game) throw new BadRequest('El juego no existe.');
-    store.setReminder({ endpoint, gameId, title: game.title, image: game.image, remindAt });
+    library.setManualReminder(entry, game, remindAt);
     res.status(201).json({ ok: true });
   });
 
   api.post('/reminders/cancel', (req, res) => {
     const { endpoint } = requireSubscriber(req).subscription;
-    store.removeReminder(endpoint, parseGameId(req.body.gameId));
+    store.removeReminder(endpoint, parseGameId(req.body.gameId), ['manual']);
+    res.json({ ok: true });
+  });
+
+  api.post('/library', async (req, res) => {
+    const entry = requireSubscriber(req);
+    const gameId = parseGameId(req.body.gameId);
+    const { action } = req.body;
+    if (!isLibraryAction(action)) throw new BadRequest('La acción no es válida.');
+    await library.change(entry, gameId, action);
+    res.json({ ok: true });
+  });
+
+  api.post('/library/sync', async (req, res) => {
+    const entry = requireSubscriber(req);
+    await library.sync(entry, parseLibrary(req.body.items));
     res.json({ ok: true });
   });
 
@@ -111,10 +123,11 @@ export function createApp({ store, catalog, notifier, jobs, config }) {
   };
   api.post('/jobs/new-game', requireAdmin, gameJob(jobs.simulateNewGame));
   api.post('/jobs/weekly', requireAdmin, gameJob(jobs.weekly));
+  api.post('/jobs/release', requireAdmin, gameJob(jobs.simulateRelease));
 
   app.use((_req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
   app.use((error, _req, res, _next) => {
-    if (error instanceof BadRequest) return res.status(400).json({ error: error.message });
+    if (error instanceof BadRequest) return res.status(error.status).json({ error: error.message });
     if (error.status >= 400 && error.status < 500) {
       return res.status(error.status).json({ error: 'Petición no válida.' });
     }

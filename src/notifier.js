@@ -7,7 +7,8 @@ export function toPayload({ title, body, url = '/', image, tag }) {
       icon: '/icons/icon-192x192.png',
       badge: '/icons/badge-96x96.png',
       ...(image && { image }),
-      ...(tag && { tag }),
+      // renotify: si reemplaza a otro aviso con la misma etiqueta, vuelve a sonar.
+      ...(tag && { tag, renotify: true }),
       data: { onActionClick: { default: { operation: 'navigateLastFocusedOrOpen', url } } },
     },
   };
